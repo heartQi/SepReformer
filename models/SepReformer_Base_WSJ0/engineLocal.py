@@ -217,23 +217,23 @@ class Engine(object):
                 logger.info(f"Training for {self.config['engine']['max_epoch']} epoches done!")
 
     @logger_wraps()
-    def _inference(self, mixture, wav_dir=None):
-        on_test_start = time.time()
+    def _inference(self, mixture, mxiture_file, wav_dir=None):
         self.model.eval()
         with torch.inference_mode():
             nnet_input = torch.tensor(mixture, device=self.device)
+            on_test_start = time.time()
             estim_src, _ = self.model(nnet_input)
+            on_test_end = time.time()
+            cost_time = on_test_end - on_test_start
+            print(cost_time)
             if self.engine_mode == "test_wav":
                 if wav_dir == None: wav_dir = os.path.join(os.path.dirname(__file__), "wav_out")
                 if wav_dir and not os.path.exists(wav_dir): os.makedirs(wav_dir)
                 mixture = torch.squeeze(mixture).cpu().data.numpy()
-                sf.write(os.path.join(wav_dir, str(0) + '_mixture.wav'),
+                sf.write(os.path.join(wav_dir, mxiture_file + '.wav'),
                          0.5 * mixture / max(abs(mixture)), 8000)
                 for i in range(self.config['model']['num_spks']):
                     src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                    sf.write(os.path.join(wav_dir, + str(0) + '_out_' + str(i) + '.wav'),
+                    sf.write(os.path.join(wav_dir, mxiture_file + f'_output_{i}.wav'),
                              0.5 * src / max(abs(src)), 8000)
-        on_test_end = time.time()
-        cost_time = on_test_end- on_test_start
-        print(cost_time)
         return
