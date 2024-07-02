@@ -55,6 +55,16 @@ parser.add_argument(
     type=str,
     default=None,
     help="This option is used to specficy save directory for output wav file in test_wav mode")
+parser.add_argument(
+    "--non_chunk",
+    type=int,
+    default=1,
+    help="This option for chunk")
+parser.add_argument(
+    "--chunk_size",
+    type=int,
+    default=1600,
+    help="This option for chunk")
 args = parser.parse_args()
 
 ''' Build Setting '''

@@ -35,6 +35,8 @@ class Engine(object):
         self.checkpoint_path = self.pretrain_weights_path if any(file.endswith(('.pt', '.pt', '.pkl')) for file in os.listdir(self.pretrain_weights_path)) else self.scratch_weights_path
         self.start_epoch = util_engine.load_last_checkpoint_n_get_epoch(self.checkpoint_path, self.model, self.main_optimizer, location=self.device)
         self.wandb_run = wandb_run
+        self.non_chunk = args.non_chunk
+        self.chunk_size = args.chunk_size
         
         # Logging 
         util_engine.model_params_mac_summary(
@@ -62,7 +64,44 @@ class Engine(object):
             if epoch == 1: self.warmup_scheduler.step()
             nnet_input = nnet_input.to(self.device)
             self.main_optimizer.zero_grad()
-            estim_src, estim_src_bn = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+
+            if self.non_chunk:
+                on_test_start = time.time()
+                # estim_src, estim_src_bn = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+                estim_src, estim_src_bn = self.model(nnet_input)
+                on_test_end = time.time()
+                cost_time = on_test_end - on_test_start
+                print("train non_chunk:", cost_time)
+            else:
+                batch_size = nnet_input.size(1)
+
+                # 初始化结果张量
+                estim_src = torch.zeros(2, 2, 1, batch_size)
+                estim_src_bn = torch.zeros(4, 2, 2, 1, batch_size)
+
+                # 遍历输入数据的块
+                for i in range(0, batch_size, self.chunk_size):
+                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                    chunk = nnet_input[:, i:i + self.chunk_size]
+
+                    on_test_start = time.time()
+                    estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("train chunk:",cost_time)
+
+                    # 更新 estim_src
+                    estim_src[0, 0, 0, i:i + self.chunk_size] = estim_src_tmp[0][0]
+                    estim_src[0, 1, 0, i:i + self.chunk_size] = estim_src_tmp[0][1]
+                    estim_src[1, 0, 0, i:i + self.chunk_size] = estim_src_tmp[1][0]
+                    estim_src[1, 1, 0, i:i + self.chunk_size] = estim_src_tmp[1][1]
+
+                    # 更新 estim_src_bn
+                    for b in range(4):
+                        for r in range(2):
+                            for c in range(2):
+                                estim_src_bn[b, r, c, 0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][c]
+
             cur_loss_s_bn = 0
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
@@ -96,7 +135,42 @@ class Engine(object):
                 nnet_input = nnet_input.to(self.device)
                 num_batch += 1
                 pbar.update(1)
-                estim_src, estim_src_bn = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+                if self.non_chunk:
+                    on_test_start = time.time()
+                    #estim_src, estim_src_bn = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+                    estim_src, estim_src_bn = self.model(nnet_input)
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("validate non_chunk:",cost_time)
+                else:
+                    batch_size = nnet_input.size(1)
+                    # 初始化结果张量
+                    estim_src = torch.zeros(2, 2, 1, batch_size)
+                    estim_src_bn = torch.zeros(4, 2, 2, 1, batch_size)
+
+                    # 遍历输入数据的块
+                    for i in range(0, batch_size, self.chunk_size):
+                        # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                        chunk = nnet_input[:, i:i + self.chunk_size]
+
+                        on_test_start = time.time()
+                        estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
+                        on_test_end = time.time()
+                        cost_time = on_test_end - on_test_start
+                        print("validate chunk:", cost_time)
+
+                        # 更新 estim_src
+                        estim_src[0, 0, 0, i:i + self.chunk_size] = estim_src_tmp[0][0]
+                        estim_src[0, 1, 0, i:i + self.chunk_size] = estim_src_tmp[0][1]
+                        estim_src[1, 0, 0, i:i + self.chunk_size] = estim_src_tmp[1][0]
+                        estim_src[1, 1, 0, i:i + self.chunk_size] = estim_src_tmp[1][1]
+
+                        # 更新 estim_src_bn
+                        for b in range(4):
+                            for r in range(2):
+                                for c in range(2):
+                                    estim_src_bn[b, r, c, 0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][c]
+
                 cur_loss_s_bn = []
                 for idx, estim_src_value in enumerate(estim_src_bn):
                     cur_loss_s_bn.append(self.PIT_SISNR_mag_loss(estims=estim_src_value, idx=idx, input_sizes=input_sizes, target_attr=src))
@@ -130,8 +204,30 @@ class Engine(object):
                     nnet_input = mixture.to('cpu')
                     num_batch += 1
                     pbar.update(1)
-                    #estim_src, _ = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
-                    estim_src, _ = self.model(nnet_input)
+                    if self.non_chunk:
+                        on_test_start = time.time()
+                        # estim_src, _ = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+                        estim_src, _ = self.model(nnet_input)
+                        on_test_end = time.time()
+                        cost_time = on_test_end - on_test_start
+                        print("test non_chunk", cost_time)
+                    else:
+                        estim_src_0 = torch.zeros(1, nnet_input.size(1))
+                        estim_src_1 = torch.zeros(1, nnet_input.size(1))
+
+                        for i in range(0, nnet_input.size(1), self.chunk_size):
+                            # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                            chunk = nnet_input[:, i:i + self.chunk_size]
+                            on_test_start = time.time()
+                            estim_src_tmp, _ = self.model(chunk)
+                            on_test_end = time.time()
+                            cost_time = on_test_end - on_test_start
+                            print("test chunk", cost_time)
+
+                            estim_src_0[0, i:i + self.chunk_size] = estim_src_tmp[0]
+                            estim_src_1[0, i:i + self.chunk_size] = estim_src_tmp[1]
+                        estim_src = [estim_src_0, estim_src_1]
+
                     cur_loss_SISNRi, cur_loss_SISNRi_src = self.PIT_SISNRi_loss(estims=estim_src, mixture=mixture, input_sizes=input_sizes, target_attr=src, eps=1.0e-15)
                     total_loss_SISNRi += cur_loss_SISNRi.item() / self.config['model']['num_spks']
                     cur_loss_SDRi, cur_loss_SDRi_src = self.PIT_SDRi_loss(estims=estim_src, mixture=mixture, input_sizes=input_sizes, target_attr=src)
@@ -222,29 +318,28 @@ class Engine(object):
         with torch.inference_mode():
             nnet_input = torch.tensor(mixture, device=self.device)
 
-            if 1:
+            if self.non_chunk:
                 on_test_start = time.time()
                 estim_src, _ = self.model(nnet_input)
                 on_test_end = time.time()
                 cost_time = on_test_end - on_test_start
-                print(cost_time)
+                print("inference non_chunk", cost_time)
 
             else:
-                # 每次读取 1600 个元素，并将这些小块存储在列表中
-                n = 1600
                 estim_src_0 = torch.zeros(1, nnet_input.size(1))
                 estim_src_1 = torch.zeros(1, nnet_input.size(1))
 
-                for i in range(0, nnet_input.size(1), n):
-                    # 获取当前 1600 个元素的块，并保持第一个维度不变
-                    chunk = nnet_input[:, i:i + n]
+                for i in range(0, nnet_input.size(1), self.chunk_size):
+                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                    chunk = nnet_input[:, i:i + self.chunk_size]
                     on_test_start = time.time()
                     estim_src_tmp, _ = self.model(chunk)
-                    estim_src_0[0,i:i + n]= estim_src_tmp[0]
-                    estim_src_1[0,i:i + n]= estim_src_tmp[1]
                     on_test_end = time.time()
                     cost_time = on_test_end - on_test_start
-                    print(cost_time)
+                    print("inference chunk", cost_time)
+
+                    estim_src_0[0,i:i + self.chunk_size]= estim_src_tmp[0]
+                    estim_src_1[0,i:i + self.chunk_size]= estim_src_tmp[1]
                 estim_src = [estim_src_0, estim_src_1]
 
             if self.engine_mode == "test_wav":
