@@ -221,11 +221,32 @@ class Engine(object):
         self.model.eval()
         with torch.inference_mode():
             nnet_input = torch.tensor(mixture, device=self.device)
-            on_test_start = time.time()
-            estim_src, _ = self.model(nnet_input)
-            on_test_end = time.time()
-            cost_time = on_test_end - on_test_start
-            print(cost_time)
+
+            if 1:
+                on_test_start = time.time()
+                estim_src, _ = self.model(nnet_input)
+                on_test_end = time.time()
+                cost_time = on_test_end - on_test_start
+                print(cost_time)
+
+            else:
+                # 每次读取 1600 个元素，并将这些小块存储在列表中
+                n = 1600
+                estim_src_0 = torch.zeros(1, nnet_input.size(1))
+                estim_src_1 = torch.zeros(1, nnet_input.size(1))
+
+                for i in range(0, nnet_input.size(1), n):
+                    # 获取当前 1600 个元素的块，并保持第一个维度不变
+                    chunk = nnet_input[:, i:i + n]
+                    on_test_start = time.time()
+                    estim_src_tmp, _ = self.model(chunk)
+                    estim_src_0[0,i:i + n]= estim_src_tmp[0]
+                    estim_src_1[0,i:i + n]= estim_src_tmp[1]
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print(cost_time)
+                estim_src = [estim_src_0, estim_src_1]
+
             if self.engine_mode == "test_wav":
                 if wav_dir == None: wav_dir = os.path.join(os.path.dirname(__file__), "wav_out")
                 if wav_dir and not os.path.exists(wav_dir): os.makedirs(wav_dir)
