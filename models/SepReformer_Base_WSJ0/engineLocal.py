@@ -76,9 +76,13 @@ class Engine(object):
                 batch_size = nnet_input.size(1)
 
                 # 初始化结果张量
-                estim_src = torch.zeros(2, 2, 1, batch_size)
-                estim_src_bn = torch.zeros(4, 2, 2, 1, batch_size)
-
+                estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
+                estim_src_bn = [
+                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
+                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
+                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
+                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
+                ]
                 # 遍历输入数据的块
                 for i in range(0, batch_size, self.chunk_size):
                     # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
@@ -89,18 +93,16 @@ class Engine(object):
                     on_test_end = time.time()
                     cost_time = on_test_end - on_test_start
                     print("train chunk:",cost_time)
-
                     # 更新 estim_src
-                    estim_src[0, 0, 0, i:i + self.chunk_size] = estim_src_tmp[0][0]
-                    estim_src[0, 1, 0, i:i + self.chunk_size] = estim_src_tmp[0][1]
-                    estim_src[1, 0, 0, i:i + self.chunk_size] = estim_src_tmp[1][0]
-                    estim_src[1, 1, 0, i:i + self.chunk_size] = estim_src_tmp[1][1]
+                    for idx in range(2):
+                        estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
+                        estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                     # 更新 estim_src_bn
                     for b in range(4):
                         for r in range(2):
-                            for c in range(2):
-                                estim_src_bn[b, r, c, 0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][c]
+                            estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
+                            estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
 
             cur_loss_s_bn = 0
             cur_loss_s_bn = []
@@ -144,9 +146,15 @@ class Engine(object):
                     print("validate non_chunk:",cost_time)
                 else:
                     batch_size = nnet_input.size(1)
+
                     # 初始化结果张量
-                    estim_src = torch.zeros(2, 2, 1, batch_size)
-                    estim_src_bn = torch.zeros(4, 2, 2, 1, batch_size)
+                    estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
+                    estim_src_bn = [
+                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
+                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
+                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
+                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
+                    ]
 
                     # 遍历输入数据的块
                     for i in range(0, batch_size, self.chunk_size):
@@ -160,16 +168,15 @@ class Engine(object):
                         print("validate chunk:", cost_time)
 
                         # 更新 estim_src
-                        estim_src[0, 0, 0, i:i + self.chunk_size] = estim_src_tmp[0][0]
-                        estim_src[0, 1, 0, i:i + self.chunk_size] = estim_src_tmp[0][1]
-                        estim_src[1, 0, 0, i:i + self.chunk_size] = estim_src_tmp[1][0]
-                        estim_src[1, 1, 0, i:i + self.chunk_size] = estim_src_tmp[1][1]
+                        for idx in range(2):
+                            estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
+                            estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                         # 更新 estim_src_bn
                         for b in range(4):
                             for r in range(2):
-                                for c in range(2):
-                                    estim_src_bn[b, r, c, 0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][c]
+                                estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
+                                estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
 
                 cur_loss_s_bn = []
                 for idx, estim_src_value in enumerate(estim_src_bn):
