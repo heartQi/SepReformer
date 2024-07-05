@@ -65,6 +65,11 @@ parser.add_argument(
     type=int,
     default=1600,
     help="This option for chunk")
+parser.add_argument(
+    "--hop_len",
+    type=int,
+    default=1440,
+    help="This option for chunk")
 args = parser.parse_args()
 
 ''' Build Setting '''
@@ -78,6 +83,8 @@ config = wandb_run.config if wandb_run else yaml_dict["wandb"]["init"]["config"]
 # Call DataLoader [train / valid / test / etc...]
 dataloaders = get_dataloaders(args, config["dataset"], config["dataloader"])
 mixed_wav = load_wav(args.mixed_file)
+frames = librosa.util.frame(mixed_wav, frame_length=args.chunk_size, hop_length=args.hop_len)
+
 # 转换为 PyTorch Tensor
 mixed_wav = torch.tensor(mixed_wav, dtype=torch.float32)
 # 添加额外的维度
@@ -103,4 +110,4 @@ schedulers = util_implement.SchedulerFactory(config["scheduler"], optimizers).ge
 
 # Call & Run Engine
 engine = Engine(args, config, model, dataloaders, criterions, optimizers, schedulers, gpuid, device, wandb_run)
-engine._inference(mixed_wav, file_name_ext, args.out_wav_dir)
+engine._inference(mixed_wav, frames, file_name_ext, args.out_wav_dir)

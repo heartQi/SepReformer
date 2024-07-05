@@ -3,6 +3,7 @@ import torch
 import csv
 import time
 import soundfile as sf
+import numpy as np
 
 from loguru import logger
 from tqdm import tqdm
@@ -37,6 +38,7 @@ class Engine(object):
         self.wandb_run = wandb_run
         self.non_chunk = args.non_chunk
         self.chunk_size = args.chunk_size
+        self.hop_len = args.hop_len
         
         # Logging 
         util_engine.model_params_mac_summary(
@@ -320,7 +322,7 @@ class Engine(object):
                 logger.info(f"Training for {self.config['engine']['max_epoch']} epoches done!")
 
     @logger_wraps()
-    def _inference(self, mixture, mxiture_file, wav_dir=None):
+    def _inference(self, mixture, frames, mxiture_file, wav_dir=None):
         self.model.eval()
         with torch.inference_mode():
             nnet_input = torch.tensor(mixture, device=self.device)
@@ -332,7 +334,7 @@ class Engine(object):
                 cost_time = on_test_end - on_test_start
                 print("inference non_chunk", cost_time)
 
-            else:
+            elif 1:
                 estim_src_0 = torch.zeros(1, nnet_input.size(1))
                 estim_src_1 = torch.zeros(1, nnet_input.size(1))
 
@@ -347,6 +349,38 @@ class Engine(object):
 
                     estim_src_0[0,i:i + self.chunk_size]= estim_src_tmp[0]
                     estim_src_1[0,i:i + self.chunk_size]= estim_src_tmp[1]
+                estim_src = [estim_src_0, estim_src_1]
+            else:
+                window = np.hamming(frames.shape[0])
+                frames_win = frames * window[:, np.newaxis]
+                frames_win_ten = torch.tensor(frames_win)
+                window_sum = np.zeros(nnet_input.size(1))
+
+                estim_src_0 = torch.zeros(1, nnet_input.size(1))
+                estim_src_1 = torch.zeros(1, nnet_input.size(1))
+                for i in range(frames_win.shape[1]):
+                    start = i * self.hop_len
+                    chunk = frames_win_ten[:,i].unsqueeze(0).float()
+                    on_test_start = time.time()
+                    #estim_src_tmp, _ = self.model(chunk)
+                    estim_src_tmp = [chunk, chunk]
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("inference chunk", cost_time)
+
+                    estim_src_0[:, start:start + self.chunk_size] += estim_src_tmp[0]
+                    estim_src_1[:, start:start + self.chunk_size] += estim_src_tmp[1]
+                    window_sum[start:start + self.chunk_size] += window
+
+                window_sum[window_sum == 0] = 1  # Avoid division by zero
+                estim_src_0 = estim_src_0.numpy().squeeze()  # 去掉多余的维度，变为形状 (N,)
+                estim_src_1 = estim_src_1.numpy().squeeze()  # 去掉多余的维度，变为形状 (N,)
+
+                estim_src_0 /= window_sum
+                estim_src_1 /= window_sum
+                estim_src_0 = torch.tensor(estim_src_0).unsqueeze(0)
+                estim_src_1 = torch.tensor(estim_src_1).unsqueeze(0)
+
                 estim_src = [estim_src_0, estim_src_1]
 
             if self.engine_mode == "test_wav":
