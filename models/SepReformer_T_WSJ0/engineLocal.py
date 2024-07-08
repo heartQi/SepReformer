@@ -80,11 +80,9 @@ class Engine(object):
                 # 初始化结果张量
                 estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
                 estim_src_bn = [
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
-                ]
+                    [torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)] for
+                    _ in range(self.model.num_stages)]
+
                 # 遍历输入数据的块
                 for i in range(0, batch_size, self.chunk_size):
                     # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
@@ -101,7 +99,7 @@ class Engine(object):
                         estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                     # 更新 estim_src_bn
-                    for b in range(4):
+                    for b in range(self.model.num_stages):
                         for r in range(2):
                             estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                             estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
@@ -152,11 +150,8 @@ class Engine(object):
                     # 初始化结果张量
                     estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
                     estim_src_bn = [
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
-                    ]
+                        [torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)]
+                        for _ in range(self.model.num_stages)]
 
                     # 遍历输入数据的块
                     for i in range(0, batch_size, self.chunk_size):
@@ -175,7 +170,7 @@ class Engine(object):
                             estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                         # 更新 estim_src_bn
-                        for b in range(4):
+                        for b in range(self.model.num_stages):
                             for r in range(2):
                                 estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                                 estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
