@@ -6,7 +6,7 @@ import librosa
 import random
 from models.SepReformer_T_WSJ0.dataset import get_dataloaders
 from models.SepReformer_T_WSJ0.model import Model
-from models.SepReformer_T_WSJ0.engineLocal import Engine
+from models.SepReformer_T_WSJ0.engineInference import Engine
 from utils import util_system, util_implement
 from utils.decorators import *
 
@@ -58,7 +58,7 @@ parser.add_argument(
 parser.add_argument(
     "--non_chunk",
     type=int,
-    default=1,
+    default=0,
     help="This option for chunk")
 parser.add_argument(
     "--chunk_size",
@@ -104,10 +104,8 @@ gpuid = tuple(map(int, config["engine"]["gpuid"].split(',')))
 device = torch.device('cpu')
 
 # Call Implement [criterion / optimizer / scheduler]
-criterions = util_implement.CriterionFactory(config["criterion"], device).get_criterions()
 optimizers = util_implement.OptimizerFactory(config["optimizer"], model.parameters()).get_optimizers()
-schedulers = util_implement.SchedulerFactory(config["scheduler"], optimizers).get_schedulers()
 
 # Call & Run Engine
-engine = Engine(args, config, model, dataloaders, criterions, optimizers, schedulers, gpuid, device, wandb_run)
+engine = Engine(args, config, model, dataloaders, optimizers, gpuid, device)
 engine._inference(mixed_wav, frames, file_name_ext, args.out_wav_dir)
