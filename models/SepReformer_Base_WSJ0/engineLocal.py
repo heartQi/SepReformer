@@ -78,11 +78,9 @@ class Engine(object):
                 # 初始化结果张量
                 estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
                 estim_src_bn = [
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                    [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
-                ]
+                    [torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)] for
+                    _ in range(self.model.num_stages)]
+
                 # 遍历输入数据的块
                 for i in range(0, batch_size, self.chunk_size):
                     # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
@@ -99,7 +97,7 @@ class Engine(object):
                         estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                     # 更新 estim_src_bn
-                    for b in range(4):
+                    for b in range(self.model.num_stages):
                         for r in range(2):
                             estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                             estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
@@ -150,11 +148,8 @@ class Engine(object):
                     # 初始化结果张量
                     estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
                     estim_src_bn = [
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)],
-                        [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
-                    ]
+                        [torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)]
+                        for _ in range(self.model.num_stages)]
 
                     # 遍历输入数据的块
                     for i in range(0, batch_size, self.chunk_size):
@@ -173,7 +168,7 @@ class Engine(object):
                             estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                         # 更新 estim_src_bn
-                        for b in range(4):
+                        for b in range(self.model.num_stages):
                             for r in range(2):
                                 estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                                 estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
@@ -248,7 +243,13 @@ class Engine(object):
                         sf.write(os.path.join(wav_dir,key[0][:-4]+str(idx)+'_mixture.wav'), 0.5*mixture/max(abs(mixture)), 8000)
                         for i in range(self.config['model']['num_spks']):
                             src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                            sf.write(os.path.join(wav_dir,key[0][:-4]+str(idx)+'_out_'+str(i)+'.wav'), 0.5*src/max(abs(src)), 8000)
+                            if self.non_chunk:
+                                sf.write(os.path.join(wav_dir, key[0][:-4] + str(idx) + '_Base_Test_Nonchunk_out_' + str(i) + '.wav'),
+                                         0.5 * src / max(abs(src)), 8000)
+                            else:
+                                sf.write(os.path.join(wav_dir, key[0][:-4] + str(idx) + '_Base_Test_Chunk_out_' + str(i) + '.wav'),
+                                         0.5 * src / max(abs(src)), 8000)
+
                     idx += 1
                     dict_loss = {"SiSNRi": total_loss_SISNRi/num_batch, "SDRi": total_loss_SDRi/num_batch}
                     pbar.set_postfix(dict_loss)
@@ -357,6 +358,11 @@ class Engine(object):
                          0.5 * mixture / max(abs(mixture)), 8000)
                 for i in range(self.config['model']['num_spks']):
                     src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                    sf.write(os.path.join(wav_dir, mxiture_file + f'_output_{i}.wav'),
-                             0.5 * src / max(abs(src)), 8000)
+                    if self.non_chunk:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_Base_Infer_Nonchunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
+                    else:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_Base_Infer_Chunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
+
         return

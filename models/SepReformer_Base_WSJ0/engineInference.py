@@ -118,6 +118,10 @@ class Engine(object):
                          0.5 * mixture / max(abs(mixture)), 8000)
                 for i in range(self.config['model']['num_spks']):
                     src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                    sf.write(os.path.join(wav_dir, mxiture_file + f'_Base_output_{i}.wav'),
-                             0.5 * src / max(abs(src)), 8000)
+                    if self.non_chunk:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_Base_Infer_Nonchunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
+                    else:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_Base_Infer_Chunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
         return

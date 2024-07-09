@@ -245,7 +245,12 @@ class Engine(object):
                         sf.write(os.path.join(wav_dir,key[0][:-4]+str(idx)+'_mixture.wav'), 0.5*mixture/max(abs(mixture)), 8000)
                         for i in range(self.config['model']['num_spks']):
                             src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                            sf.write(os.path.join(wav_dir,key[0][:-4]+str(idx)+'_out_'+str(i)+'.wav'), 0.5*src/max(abs(src)), 8000)
+                            if self.non_chunk:
+                                sf.write(os.path.join(wav_dir, key[0][:-4] + str(idx) + '_T_Test_Nonchunk_out_' + str(i) + '.wav'),
+                                         0.5 * src / max(abs(src)), 8000)
+                            else:
+                                sf.write(os.path.join(wav_dir, key[0][:-4] + str(idx) + '_T_Test_Chunk_out_' + str(i) + '.wav'),
+                                         0.5 * src / max(abs(src)), 8000)
                     idx += 1
                     dict_loss = {"SiSNRi": total_loss_SISNRi/num_batch, "SDRi": total_loss_SDRi/num_batch}
                     pbar.set_postfix(dict_loss)
@@ -386,6 +391,10 @@ class Engine(object):
                          0.5 * mixture / max(abs(mixture)), 8000)
                 for i in range(self.config['model']['num_spks']):
                     src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                    sf.write(os.path.join(wav_dir, mxiture_file + f'_output_{i}.wav'),
-                             0.5 * src / max(abs(src)), 8000)
+                    if self.non_chunk:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_T_Infer_Nonchunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
+                    else:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_T_Infer_Chunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
         return
