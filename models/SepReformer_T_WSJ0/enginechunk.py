@@ -3,6 +3,7 @@ import torch
 import csv
 import time
 import soundfile as sf
+import numpy as np
 
 from loguru import logger
 from tqdm import tqdm
@@ -63,29 +64,61 @@ class Engine(object):
             if epoch == 1: self.warmup_scheduler.step()
             nnet_input = nnet_input.to(self.device)
             self.main_optimizer.zero_grad()
-            batch_size = nnet_input.size(1)
+            frame_len = nnet_input.size(1)
             # 初始化结果张量
-            estim_src = [torch.zeros(2, batch_size).to(self.device), torch.zeros(2, batch_size).to(self.device)]
-            estim_src_bn = [[torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)] for _ in range(self.model.num_stages)]
-            # 遍历输入数据的块
-            for i in range(0, batch_size, self.chunk_size):
-                if i + self.chunk_size > batch_size:
-                    break
-                # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                chunk = nnet_input[:, i:i + self.chunk_size]
-                estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
-                                                                                  device_ids=self.gpuid)
-                # 更新 estim_src
-                for idx in range(2):
-                    estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
-                    estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
+            estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+            estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+            if 0:
+                # 遍历输入数据的块
+                for i in range(0, frame_len, self.chunk_size):
+                    if i + self.chunk_size > frame_len:
+                        break
+                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                    chunk = nnet_input[:, i:i + self.chunk_size]
+                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
+                                                                                      device_ids=self.gpuid)
+                    # 更新 estim_src
+                    for idx in range(2):
+                        estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
+                        estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
-                # 更新 estim_src_bn
-                for b in range(self.model.num_stages):
-                    for r in range(2):
-                        estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
-                        estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
-            
+                    # 更新 estim_src_bn
+                    for b in range(self.model.num_stages):
+                        for r in range(2):
+                            estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
+                            estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
+            else:
+                window = torch.from_numpy(np.hamming(self.chunk_size)).to(self.device)
+                hop_len = 1440
+                overlap = self.chunk_size - hop_len
+                window_sum = torch.cat([
+                    window[-overlap:] + window[:overlap],
+                    window[overlap:-overlap]
+                ], dim=0).to(self.device)
+
+                # 遍历输入数据的块
+                for i in range(0, frame_len, hop_len):
+                    if i + self.chunk_size > frame_len:
+                        break
+                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                    chunk = nnet_input[:, i:i + self.chunk_size]
+                    chunk = (chunk * window).float()
+                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
+                                                                                      device_ids=self.gpuid)
+
+                    # 更新 estim_src
+                    for idx in range(2):
+                        estim_src[idx][0, i:i + self.chunk_size] = estim_src[idx][0, i:i + self.chunk_size] + estim_src_tmp[idx][0]
+                        estim_src[idx][1, i:i + self.chunk_size] = estim_src[idx][1, i:i + self.chunk_size] + estim_src_tmp[idx][1]
+                        estim_src[idx][0, i:i + hop_len] /= window_sum
+                        estim_src[idx][1, i:i + hop_len] /= window_sum
+
+                    # 更新 estim_src_bn
+                    for b in range(self.model.num_stages):
+                        for r in range(2):
+                            estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
+                            estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
+
             cur_loss_s_bn = 0
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
@@ -119,28 +152,62 @@ class Engine(object):
                 nnet_input = nnet_input.to(self.device)
                 num_batch += 1
                 pbar.update(1)
-                batch_size = nnet_input.size(1)
+                frame_len = nnet_input.size(1)
                 # 初始化结果张量
-                estim_src = [torch.zeros(2, batch_size).to(self.device), torch.zeros(2, batch_size).to(self.device)]
-                estim_src_bn = [[torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)] for _ in range(self.model.num_stages)]
-                # 遍历输入数据的块
-                for i in range(0, batch_size, self.chunk_size):
-                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                    if i + self.chunk_size > batch_size:
-                        break
-                    chunk = nnet_input[:, i:i + self.chunk_size]
-                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
-                                                                                      device_ids=self.gpuid)
-                    # 更新 estim_src
-                    for idx in range(2):
-                        estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
-                        estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
+                estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
 
-                    # 更新 estim_src_bn
-                    for b in range(self.model.num_stages):
-                        for r in range(2):
-                            estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
-                            estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
+                if 0:
+                    # 遍历输入数据的块
+                    for i in range(0, frame_len, self.chunk_size):
+                        # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                        if i + self.chunk_size > frame_len:
+                            break
+                        chunk = nnet_input[:, i:i + self.chunk_size]
+                        estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
+                                                                                          device_ids=self.gpuid)
+                        # 更新 estim_src
+                        for idx in range(2):
+                            estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
+                            estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
+
+                        # 更新 estim_src_bn
+                        for b in range(self.model.num_stages):
+                            for r in range(2):
+                                estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
+                                estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
+                else:
+                    window = torch.from_numpy(np.hamming(self.chunk_size)).to(self.device)
+                    hop_len = 1440
+                    overlap = self.chunk_size - hop_len
+                    window_sum = torch.cat([
+                        window[-overlap:] + window[:overlap],
+                        window[overlap:-overlap]
+                    ], dim=0).to(self.device)
+
+                    # 遍历输入数据的块
+                    for i in range(0, frame_len, hop_len):
+                        if i + self.chunk_size > frame_len:
+                            break
+                        # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                        chunk = nnet_input[:, i:i + self.chunk_size]
+                        chunk = (chunk * window).float()
+                        estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
+                                                                                          device_ids=self.gpuid)
+
+                        # 更新 estim_src
+                        for idx in range(2):
+                            estim_src[idx][0, i:i + self.chunk_size] += estim_src_tmp[idx][0]
+                            estim_src[idx][1, i:i + self.chunk_size] += estim_src_tmp[idx][1]
+                            estim_src[idx][0, i:i + hop_len] /= window_sum
+                            estim_src[idx][1, i:i + hop_len] /= window_sum
+
+                        # 更新 estim_src_bn
+                        for b in range(self.model.num_stages):
+                            for r in range(2):
+                                estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
+                                estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
+
 
                 cur_loss_s_bn = []
                 for idx, estim_src_value in enumerate(estim_src_bn):
