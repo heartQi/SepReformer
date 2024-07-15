@@ -116,8 +116,10 @@ class Engine(object):
                     # 更新 estim_src_bn
                     for b in range(self.model.num_stages):
                         for r in range(2):
-                            estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
-                            estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
+                            estim_src_bn[b][r][0, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][0]
+                            estim_src_bn[b][r][1, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][1]
+                            estim_src_bn[b][r][0, i:i + hop_len] /= window_sum
+                            estim_src_bn[b][r][1, i:i + hop_len] /= window_sum
 
             cur_loss_s_bn = 0
             cur_loss_s_bn = []
@@ -205,9 +207,10 @@ class Engine(object):
                         # 更新 estim_src_bn
                         for b in range(self.model.num_stages):
                             for r in range(2):
-                                estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
-                                estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
-
+                                estim_src_bn[b][r][0, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][0]
+                                estim_src_bn[b][r][1, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][1]
+                                estim_src_bn[b][r][0, i:i + hop_len] /= window_sum
+                                estim_src_bn[b][r][1, i:i + hop_len] /= window_sum
 
                 cur_loss_s_bn = []
                 for idx, estim_src_value in enumerate(estim_src_bn):
