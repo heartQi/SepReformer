@@ -75,16 +75,17 @@ class Engine(object):
                 cost_time = on_test_end - on_test_start
                 print("train non_chunk:", cost_time)
             else:
-                batch_size = nnet_input.size(1)
-
+                frame_len = nnet_input.size(1)
                 # 初始化结果张量
-                estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
-                estim_src_bn = [
-                    [torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)] for
-                    _ in range(self.model.num_stages)]
+                if self.model.num_spks == 1:
+                    estim_src = [torch.zeros(2, frame_len).to(self.device)]
+                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                else:
+                    estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
 
                 # 遍历输入数据的块
-                for i in range(0, batch_size, self.chunk_size):
+                for i in range(0, frame_len, self.chunk_size):
                     # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
                     chunk = nnet_input[:, i:i + self.chunk_size]
 
@@ -94,17 +95,16 @@ class Engine(object):
                     cost_time = on_test_end - on_test_start
                     print("train chunk:",cost_time)
                     # 更新 estim_src
-                    for idx in range(2):
+                    for idx in range(self.model.num_spks):
                         estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
                         estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                     # 更新 estim_src_bn
                     for b in range(self.model.num_stages):
-                        for r in range(2):
+                        for r in range(self.model.num_spks):
                             estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                             estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
 
-            cur_loss_s_bn = 0
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
                 cur_loss_s_bn.append(self.PIT_SISNR_mag_loss(estims=estim_src_value, idx=idx, input_sizes=input_sizes, target_attr=src))
@@ -145,16 +145,18 @@ class Engine(object):
                     cost_time = on_test_end - on_test_start
                     print("validate non_chunk:",cost_time)
                 else:
-                    batch_size = nnet_input.size(1)
+                    frame_len = nnet_input.size(1)
 
                     # 初始化结果张量
-                    estim_src = [torch.zeros(2, batch_size), torch.zeros(2, batch_size)]
-                    estim_src_bn = [
-                        [torch.zeros(2, batch_size, device=self.device), torch.zeros(2, batch_size, device=self.device)]
-                        for _ in range(self.model.num_stages)]
+                    if self.model.num_spks == 1:
+                        estim_src = [torch.zeros(2, frame_len).to(self.device)]
+                        estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                    else:
+                        estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                        estim_src_bn = [[torch.zeros(2, frame_len, device=self.device),torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
 
                     # 遍历输入数据的块
-                    for i in range(0, batch_size, self.chunk_size):
+                    for i in range(0, frame_len, self.chunk_size):
                         # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
                         chunk = nnet_input[:, i:i + self.chunk_size]
 
@@ -165,13 +167,13 @@ class Engine(object):
                         print("validate chunk:", cost_time)
 
                         # 更新 estim_src
-                        for idx in range(2):
+                        for idx in range(self.model.num_spks):
                             estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
                             estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                         # 更新 estim_src_bn
                         for b in range(self.model.num_stages):
-                            for r in range(2):
+                            for r in range(self.model.num_spks):
                                 estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                                 estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
 
@@ -216,10 +218,15 @@ class Engine(object):
                         cost_time = on_test_end - on_test_start
                         print("test non_chunk", cost_time)
                     else:
-                        estim_src_0 = torch.zeros(1, nnet_input.size(1))
-                        estim_src_1 = torch.zeros(1, nnet_input.size(1))
+                        frame_len = nnet_input.size(1)
+                        # 初始化结果张量
+                        if self.model.num_spks == 1:
+                            estim_src = [torch.zeros(1, frame_len).to(self.device)]
+                        else:
+                            estim_src = [torch.zeros(1, frame_len).to(self.device),
+                                         torch.zeros(1, frame_len).to(self.device)]
 
-                        for i in range(0, nnet_input.size(1), self.chunk_size):
+                        for i in range(0, frame_len, self.chunk_size):
                             # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
                             chunk = nnet_input[:, i:i + self.chunk_size]
                             on_test_start = time.time()
@@ -228,9 +235,8 @@ class Engine(object):
                             cost_time = on_test_end - on_test_start
                             print("test chunk", cost_time)
 
-                            estim_src_0[0, i:i + self.chunk_size] = estim_src_tmp[0]
-                            estim_src_1[0, i:i + self.chunk_size] = estim_src_tmp[1]
-                        estim_src = [estim_src_0, estim_src_1]
+                            for idx in range(self.model.num_spks):
+                                estim_src[idx][0, i:i + self.chunk_size] += estim_src_tmp[idx][0]
 
                     cur_loss_SISNRi, cur_loss_SISNRi_src = self.PIT_SISNRi_loss(estims=estim_src, mixture=mixture, input_sizes=input_sizes, target_attr=src, eps=1.0e-15)
                     total_loss_SISNRi += cur_loss_SISNRi.item() / self.config['model']['num_spks']

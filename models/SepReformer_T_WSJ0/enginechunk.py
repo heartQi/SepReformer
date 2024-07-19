@@ -66,8 +66,13 @@ class Engine(object):
             self.main_optimizer.zero_grad()
             frame_len = nnet_input.size(1)
             # 初始化结果张量
-            estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
-            estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+            if self.model.num_spks == 1:
+                estim_src = [torch.zeros(2, frame_len).to(self.device)]
+                estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+            else:
+                estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+
             if 0:
                 # 遍历输入数据的块
                 for i in range(0, frame_len, self.chunk_size):
@@ -75,16 +80,16 @@ class Engine(object):
                         break
                     # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
                     chunk = nnet_input[:, i:i + self.chunk_size]
-                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
-                                                                                      device_ids=self.gpuid)
+                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk, device_ids=self.gpuid)
+
                     # 更新 estim_src
-                    for idx in range(2):
+                    for idx in range(self.model.num_spks):
                         estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
                         estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                     # 更新 estim_src_bn
                     for b in range(self.model.num_stages):
-                        for r in range(2):
+                        for r in range(self.model.num_spks):
                             estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                             estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
             else:
@@ -103,25 +108,23 @@ class Engine(object):
                     # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
                     chunk = nnet_input[:, i:i + self.chunk_size]
                     chunk = (chunk * window).float()
-                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
-                                                                                      device_ids=self.gpuid)
+                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,device_ids=self.gpuid)
 
                     # 更新 estim_src
-                    for idx in range(2):
-                        estim_src[idx][0, i:i + self.chunk_size] = estim_src[idx][0, i:i + self.chunk_size] + estim_src_tmp[idx][0]
-                        estim_src[idx][1, i:i + self.chunk_size] = estim_src[idx][1, i:i + self.chunk_size] + estim_src_tmp[idx][1]
+                    for idx in range(self.model.num_spks):
+                        estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
                         estim_src[idx][0, i:i + hop_len] /= window_sum
+                        estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
                         estim_src[idx][1, i:i + hop_len] /= window_sum
 
                     # 更新 estim_src_bn
                     for b in range(self.model.num_stages):
-                        for r in range(2):
+                        for r in range(self.model.num_spks):
                             estim_src_bn[b][r][0, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][0]
-                            estim_src_bn[b][r][1, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][1]
                             estim_src_bn[b][r][0, i:i + hop_len] /= window_sum
+                            estim_src_bn[b][r][1, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][1]
                             estim_src_bn[b][r][1, i:i + hop_len] /= window_sum
 
-            cur_loss_s_bn = 0
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
                 cur_loss_s_bn.append(self.PIT_SISNR_mag_loss(estims=estim_src_value, idx=idx, input_sizes=input_sizes, target_attr=src))
@@ -156,8 +159,12 @@ class Engine(object):
                 pbar.update(1)
                 frame_len = nnet_input.size(1)
                 # 初始化结果张量
-                estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
-                estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                if self.model.num_spks == 1:
+                    estim_src = [torch.zeros(2, frame_len).to(self.device)]
+                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                else:
+                    estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
 
                 if 0:
                     # 遍历输入数据的块
@@ -169,13 +176,13 @@ class Engine(object):
                         estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
                                                                                           device_ids=self.gpuid)
                         # 更新 estim_src
-                        for idx in range(2):
+                        for idx in range(self.model.num_spks):
                             estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
                             estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
 
                         # 更新 estim_src_bn
                         for b in range(self.model.num_stages):
-                            for r in range(2):
+                            for r in range(self.model.num_spks):
                                 estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                                 estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
                 else:
@@ -196,20 +203,19 @@ class Engine(object):
                         chunk = (chunk * window).float()
                         estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
                                                                                           device_ids=self.gpuid)
-
                         # 更新 estim_src
-                        for idx in range(2):
+                        for idx in range(self.model.num_spks):
                             estim_src[idx][0, i:i + self.chunk_size] += estim_src_tmp[idx][0]
-                            estim_src[idx][1, i:i + self.chunk_size] += estim_src_tmp[idx][1]
                             estim_src[idx][0, i:i + hop_len] /= window_sum
+                            estim_src[idx][1, i:i + self.chunk_size] += estim_src_tmp[idx][1]
                             estim_src[idx][1, i:i + hop_len] /= window_sum
 
                         # 更新 estim_src_bn
                         for b in range(self.model.num_stages):
-                            for r in range(2):
+                            for r in range(self.model.num_spks):
                                 estim_src_bn[b][r][0, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][0]
-                                estim_src_bn[b][r][1, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][1]
                                 estim_src_bn[b][r][0, i:i + hop_len] /= window_sum
+                                estim_src_bn[b][r][1, i:i + self.chunk_size] += estim_src_bn_tmp[b][r][1]
                                 estim_src_bn[b][r][1, i:i + hop_len] /= window_sum
 
                 cur_loss_s_bn = []
