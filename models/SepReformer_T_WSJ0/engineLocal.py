@@ -96,14 +96,15 @@ class Engine(object):
                     print("train chunk:",cost_time)
                     # 更新 estim_src
                     for idx in range(self.model.num_spks):
-                        estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
-                        estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
+                        for idx_batch in range(dataloader.batch_size):
+                            estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch]
 
                     # 更新 estim_src_bn
                     for b in range(self.model.num_stages):
                         for r in range(self.model.num_spks):
-                            estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
-                            estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
+                            for idx_batch in range(dataloader.batch_size):
+                                estim_src_bn[b][r][idx_batch, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][idx_batch]
+
 
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
