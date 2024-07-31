@@ -113,7 +113,7 @@ class Engine(object):
                     # 更新 estim_src
                     for idx in range(self.model.num_spks):
                         for idx_batch in range(dataloader.batch_size):
-                            estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch]
+                            estim_src[idx][idx_batch, i:i + self.chunk_size] += estim_src_tmp[idx][idx_batch]
                             estim_src[idx][idx_batch, i:i + hop_len] /= window_sum
 
                     # 更新 estim_src_bn

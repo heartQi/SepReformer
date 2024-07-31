@@ -51,12 +51,18 @@ class Engine(object):
     @logger_wraps()
     def _inference(self, mixture, frames, mxiture_file, wav_dir=None):
         self.model.eval()
-        no_win = 0
+        no_win = 1
         out_win = 0
         out_linear = 0
-        win_in_win_out = 1
+        win_in_win_out = 0
         with torch.inference_mode():
             nnet_input = torch.tensor(mixture, device=self.device)
+            if self.model.num_spks == 1:
+                estim_src = [torch.zeros(1, nnet_input.size(1)).to(self.device)]
+
+            else:
+                estim_src = [torch.zeros(1, nnet_input.size(1)).to(self.device),
+                             torch.zeros(1, nnet_input.size(1)).to(self.device)]
 
             if self.non_chunk:
                 on_test_start = time.time()
@@ -65,9 +71,6 @@ class Engine(object):
                 cost_time = on_test_end - on_test_start
                 print("Total inference non_chunk------------:", cost_time)
             elif no_win:
-                estim_src_0 = torch.zeros(1, nnet_input.size(1))
-                estim_src_1 = torch.zeros(1, nnet_input.size(1))
-
                 for i in range(0, nnet_input.size(1), self.chunk_size):
                     if i + self.chunk_size > nnet_input.size(1):
                         break
@@ -79,9 +82,9 @@ class Engine(object):
                     cost_time = on_test_end - on_test_start
                     print("Total inference chunk no win------------:", cost_time)
 
-                    estim_src_0[0,i:i + self.chunk_size]= estim_src_tmp[0]
-                    estim_src_1[0,i:i + self.chunk_size]= estim_src_tmp[1]
-                estim_src = [estim_src_0, estim_src_1]
+                    # 更新 estim_src
+                    for idx in range(self.model.num_spks):
+                            estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
             elif out_win:
                 estim_src_0 = torch.zeros(1, nnet_input.size(1))
                 estim_src_1 = torch.zeros(1, nnet_input.size(1))
@@ -168,8 +171,6 @@ class Engine(object):
             elif win_in_win_out:
                 window = torch.from_numpy(np.hamming(self.chunk_size))
                 window_sum = torch.zeros(nnet_input.size(1))
-                estim_src_0 = torch.zeros(1, nnet_input.size(1))
-                estim_src_1 = torch.zeros(1, nnet_input.size(1))
 
                 for i in range(0, nnet_input.size(1), self.hop_len):
                     if i + self.chunk_size > nnet_input.size(1):
@@ -186,20 +187,17 @@ class Engine(object):
                     print("Total inference chunk win in win out------------:", cost_time)
                     window_sum[i:i + self.chunk_size] += window
 
-                    estim_src_0[:, i:i + self.chunk_size] += estim_src_tmp[0]
-                    estim_src_1[:, i:i + self.chunk_size] += estim_src_tmp[1]
-                    estim_src_0[:, i:i + self.hop_len] /= window_sum[i:i + self.hop_len]
-                    estim_src_1[:, i:i + self.hop_len] /= window_sum[i:i + self.hop_len]
+                    # 更新 estim_src
+                    for idx in range(self.model.num_spks):
+                            estim_src[idx][0, i:i + self.chunk_size] = estim_src[idx][0, i:i + self.chunk_size] + estim_src_tmp[idx][0]
+                            estim_src[idx][0, i:i + self.hop_len] /= window_sum[i:i + self.hop_len]
 
-                estim_src = [estim_src_0, estim_src_1]
             else:
                 window = np.hamming(frames.shape[0])
                 frames_win = frames * window[:, np.newaxis]
                 frames_win_ten = torch.tensor(frames_win)
                 window_sum = np.zeros(nnet_input.size(1))
 
-                estim_src_0 = torch.zeros(1, nnet_input.size(1))
-                estim_src_1 = torch.zeros(1, nnet_input.size(1))
                 for i in range(frames_win.shape[1]):
                     start = i * self.hop_len
                     chunk = frames_win_ten[:,i].unsqueeze(0).float()
@@ -210,25 +208,11 @@ class Engine(object):
                     cost_time = on_test_end - on_test_start
                     print("inference chunk", cost_time)
                     window_sum[start:start + self.chunk_size] += window
-                    w = window_sum[start:start + self.chunk_size]
 
-                    print("wwww",window_sum[start:start + self.chunk_size])
-
-                    estim_src_0[:, start:start + self.chunk_size] += estim_src_tmp[0]
-                    estim_src_1[:, start:start + self.chunk_size] += estim_src_tmp[1]
-                    estim_src_0[:, start:start + self.hop_len] /= window_sum[start:start + self.hop_len]
-                    estim_src_1[:, start:start + self.hop_len] /= window_sum[start:start + self.hop_len]
-
-                #window_sum[window_sum == 0] = 1  # Avoid division by zero
-                estim_src_0 = estim_src_0.numpy().squeeze()  # 去掉多余的维度，变为形状 (N,)
-                estim_src_1 = estim_src_1.numpy().squeeze()  # 去掉多余的维度，变为形状 (N,)
-
-                #estim_src_0 /= window_sum
-                #estim_src_1 /= window_sum
-                estim_src_0 = torch.tensor(estim_src_0).unsqueeze(0)
-                estim_src_1 = torch.tensor(estim_src_1).unsqueeze(0)
-
-                estim_src = [estim_src_0, estim_src_1]
+                    # 更新 estim_src
+                    for idx in range(self.model.num_spks):
+                            estim_src[idx][0, start:start + self.chunk_size] += estim_src_tmp[idx][0]
+                            estim_src[idx][0, start:start + self.hop_len] /= window_sum[start:start + self.hop_len]
 
             if self.engine_mode == "test_wav":
                 if wav_dir == None: wav_dir = os.path.join(os.path.dirname(__file__), "wav_out")
@@ -236,13 +220,17 @@ class Engine(object):
                 mixture = torch.squeeze(mixture).cpu().data.numpy()
                 sf.write(os.path.join(wav_dir, mxiture_file + '.wav'),
                          mixture, 8000)
-                src0 = torch.squeeze(estim_src[0]).cpu().data.numpy()
-                src1 = torch.squeeze(estim_src[1]).cpu().data.numpy()
-                max_src = max(max(abs(src0)), max(abs(src1)))
+                if self.model.num_spks > 1:
+                    src0 = torch.squeeze(estim_src[0]).cpu().data.numpy()
+                    src1 = torch.squeeze(estim_src[1]).cpu().data.numpy()
+                    max_src = max(max(abs(src0)), max(abs(src1)))
+                else:
+                    src0 = torch.squeeze(estim_src[0]).cpu().data.numpy()
+                    max_src = np.max(np.abs(src0))
 
                 for i in range(self.config['model']['num_spks']):
                     src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                    print(max(abs(src)))
+                    print(np.max(np.abs(src)))
 
                     if self.non_chunk:
                         sf.write(os.path.join(wav_dir, mxiture_file + f'_T_Infer_Nonchunk_output_{i}.wav'),
