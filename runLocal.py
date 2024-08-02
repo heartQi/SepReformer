@@ -23,12 +23,17 @@ parser.add_argument(
 parser.add_argument(
     "--non_chunk",
     type=int,
-    default=1,
+    default=0,
     help="This option for chunk")
 parser.add_argument(
     "--chunk_size",
     type=int,
     default=1600,
+    help="This option for chunk")
+parser.add_argument(
+    "--hop_len",
+    type=int,
+    default=1440,
     help="This option for chunk")
 
 args = parser.parse_args()

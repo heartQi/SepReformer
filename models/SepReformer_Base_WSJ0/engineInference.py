@@ -66,6 +66,8 @@ class Engine(object):
                 estim_src_1 = torch.zeros(1, nnet_input.size(1))
 
                 for i in range(0, nnet_input.size(1), self.chunk_size):
+                    if i + self.chunk_size > nnet_input.size(1):
+                        break
                     # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
                     chunk = nnet_input[:, i:i + self.chunk_size]
                     on_test_start = time.time()
@@ -89,8 +91,8 @@ class Engine(object):
                     start = i * self.hop_len
                     chunk = frames_win_ten[:,i].unsqueeze(0).float()
                     on_test_start = time.time()
-                    estim_src_tmp, _ = self.model(chunk)
-                    #estim_src_tmp = [chunk, chunk]
+                    #estim_src_tmp, _ = self.model(chunk)
+                    estim_src_tmp = [chunk, chunk]
                     on_test_end = time.time()
                     cost_time = on_test_end - on_test_start
                     print("inference chunk", cost_time)
@@ -115,13 +117,14 @@ class Engine(object):
                 if wav_dir and not os.path.exists(wav_dir): os.makedirs(wav_dir)
                 mixture = torch.squeeze(mixture).cpu().data.numpy()
                 sf.write(os.path.join(wav_dir, mxiture_file + '.wav'),
-                         0.5 * mixture / max(abs(mixture)), 8000)
+                         mixture, 8000)
+
                 for i in range(self.config['model']['num_spks']):
                     src = torch.squeeze(estim_src[i]).cpu().data.numpy()
                     if self.non_chunk:
                         sf.write(os.path.join(wav_dir, mxiture_file + f'_Base_Infer_Nonchunk_output_{i}.wav'),
-                                 0.5 * src / max(abs(src)), 8000)
+                                 src / max(max(abs(src)), 3000.0), 8000)
                     else:
                         sf.write(os.path.join(wav_dir, mxiture_file + f'_Base_Infer_Chunk_output_{i}.wav'),
-                                 0.5 * src / max(abs(src)), 8000)
+                                 src / max(max(abs(src)), 3000.0), 8000)
         return
