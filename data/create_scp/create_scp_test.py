@@ -6,9 +6,9 @@ train_s1_scp = 'tr_s1.scp'
 train_s2_scp = 'tr_s2.scp'
 
 
-train_mix = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/mix'
-train_s1 = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/s1'
-train_s2 = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/s2'
+train_mix = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/train-clean-100'
+train_s1 = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/train-clean-100'
+train_s2 = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/train-clean-100'
 
 
 tr_mix = open(train_mix_scp,'w')
@@ -38,9 +38,13 @@ test_mix_scp = 'tt_mix.scp'
 test_s1_scp = 'tt_s1.scp'
 test_s2_scp = 'tt_s2.scp'
 
-test_mix = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/mix'
-test_s1 = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/s1'
-test_s2 = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/s2'
+test_mix = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/train-clean-360/mix_clean'
+test_s1 = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/train-clean-360/s1'
+test_s2 = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/train-clean-360/s2'
+
+# test_mix = '/home/nas/user/Uihyeop/DB/wsj0-mix/2speakers/wav8k/min/tt/mix'
+# test_s1 = '/home/nas/user/Uihyeop/DB/wsj0-mix/2speakers/wav8k/min/tt/s1'
+# test_s2 = '/home/nas/user/Uihyeop/DB/wsj0-mix/2speakers/wav8k/min/tt/s2'
 
 tt_mix = open(test_mix_scp,'w')
 for root, dirs, files in os.walk(test_mix):
@@ -69,9 +73,9 @@ cv_mix_scp = 'cv_mix.scp'
 cv_s1_scp = 'cv_s1.scp'
 cv_s2_scp = 'cv_s2.scp'
 
-cv_mix = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/mix'
-cv_s1 = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/s1'
-cv_s2 = '/Users/mervin.qi/Desktop/PSE/Workspace/SepReformer/tt/s2'
+cv_mix = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/dev-clean/mix_both'
+cv_s1 = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/dev-clean/s1'
+cv_s2 = '/Users/mervin.qi/Desktop/PSE/Dataset/voicefilter_normalize/dev-clean/s2'
 
 cv_mix_file = open(cv_mix_scp,'w')
 for root, dirs, files in os.walk(cv_mix):

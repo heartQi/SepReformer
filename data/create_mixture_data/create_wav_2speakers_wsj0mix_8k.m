@@ -22,6 +22,9 @@ data_type = {'tr','cv','tt'};
 wsj0root = '/home/nas/DB/wsj_wav/'; % YOUR_PATH/, the folder containing wsj0/
 output_dir16k='/home/nas/user/Uihyeop/DB/wsj0-mix/2speakers/wav16k';
 output_dir8k='/home/nas/user/Uihyeop/DB/wsj0-mix/2speakers/wav8k';
+% wsj0root = '/db/processed/public/WSJ0WAV_full/'; % YOUR_PATH/, the folder containing wsj0/
+% output_dir16k='/mm1/leroux/wsj0-mix/2speakers/wav16k';
+% output_dir8k='/mm1/leroux/wsj0-mix/2speakers/wav8k';
 
 min_max = {'min'};
 
