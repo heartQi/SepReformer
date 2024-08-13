@@ -11,7 +11,8 @@ from .modules.module import *
 
 @logger_wraps()
 class Model(torch.nn.Module):
-    def __init__(self, 
+    def __init__(self,
+                 batch_size: int,
                  num_stages: int, 
                  num_spks: int, 
                  module_audio_enc: dict, 
@@ -20,6 +21,7 @@ class Model(torch.nn.Module):
                  module_output_layer: dict, 
                  module_audio_dec: dict):
         super().__init__()
+        self.batch_size = batch_size
         self.num_stages = num_stages
         self.num_spks = num_spks
         self.audio_encoder = AudioEncoder(**module_audio_enc)
@@ -27,7 +29,7 @@ class Model(torch.nn.Module):
         self.separator = Separator(**module_separator)
         self.out_layer = OutputLayer(**module_output_layer)
         self.audio_decoder = AudioDecoder(**module_audio_dec)
-        
+
         # Aux_loss
         self.out_layer_bn = torch.nn.ModuleList([])
         self.decoder_bn = torch.nn.ModuleList([])

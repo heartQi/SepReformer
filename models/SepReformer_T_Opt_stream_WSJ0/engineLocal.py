@@ -36,8 +36,10 @@ class Engine(object):
         self.checkpoint_path = self.pretrain_weights_path if any(file.endswith(('.pt', '.pt', '.pkl')) for file in os.listdir(self.pretrain_weights_path)) else self.scratch_weights_path
         self.start_epoch = util_engine.load_last_checkpoint_n_get_epoch(self.checkpoint_path, self.model, self.main_optimizer, location=self.device)
         self.wandb_run = wandb_run
+        self.non_chunk = args.non_chunk
         self.chunk_size = 400
-        self.win_size = 4000
+        self.hop_len = args.hop_len
+        self.win_size = 2000
         
         # Logging 
         util_engine.model_params_mac_summary(
@@ -56,6 +58,8 @@ class Engine(object):
         tot_loss_freq = [0 for _ in range(self.model.num_stages)]
         tot_loss_time, num_batch = 0, 0
         pbar = tqdm(total=len(dataloader), unit='batches', bar_format='{l_bar}{bar:25}{r_bar}{bar:-10b}', colour="YELLOW", dynamic_ncols=True)
+        init_size = self.win_size - self.chunk_size
+        init_chunk = torch.zeros(dataloader.batch_size, init_size).to(self.device)
         for input_sizes, mixture, src, _ in dataloader:
             nnet_input = mixture
             nnet_input = functions.apply_cmvn(nnet_input) if self.config['engine']['mvn'] else nnet_input
@@ -65,59 +69,57 @@ class Engine(object):
             if epoch == 1: self.warmup_scheduler.step()
             nnet_input = nnet_input.to(self.device)
             self.main_optimizer.zero_grad()
-            frame_len = nnet_input.size(1)
-            # 初始化结果张量
-            if self.model.num_spks == 1:
-                estim_src = [torch.zeros(2, frame_len).to(self.device)]
-                estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+
+            if self.non_chunk:
+                on_test_start = time.time()
+                # estim_src, estim_src_bn = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+                estim_src, estim_src_bn = self.model(nnet_input)
+                on_test_end = time.time()
+                cost_time = on_test_end - on_test_start
+                print("train non_chunk:", cost_time)
             else:
-                estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
-                estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                frame_len = nnet_input.size(1)
+                # 初始化结果张量
+                if self.model.num_spks == 1:
+                    estim_src = [torch.zeros(2, frame_len).to(self.device)]
+                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                else:
+                    estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
 
-            if 0:
-                # 遍历输入数据的块
-                for i in range(0, frame_len, self.chunk_size):
-                    if i + self.chunk_size > frame_len:
-                        break
-                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                    chunk = nnet_input[:, i:i + self.chunk_size]
-                    estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk, device_ids=self.gpuid)
-
-                    # 更新 estim_src
-                    for idx in range(self.model.num_spks):
-                        estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
-                        estim_src[idx][1, i:i + self.chunk_size] = estim_src_tmp[idx][1]
-
-                    # 更新 estim_src_bn
-                    for b in range(self.model.num_stages):
-                        for r in range(self.model.num_spks):
-                            estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
-                            estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
-            else:
-                init_size = self.win_size - self.chunk_size
-                init_chunk = torch.zeros(dataloader.batch_size, init_size).to(self.device)
                 nnet_input = torch.cat([init_chunk[:, :], nnet_input[:, :]], dim=1)
                 # 遍历输入数据的块
                 for i in range(0, frame_len, self.chunk_size):
                     if i + self.chunk_size > frame_len:
                         break
                     chunk = nnet_input[:, i:i + self.win_size]
-                    estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
-
-                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
                     #chunk = nnet_input[:, i:i + self.chunk_size]
-                    #estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,device_ids=self.gpuid)
 
-                    # 更新 estim_src
+                    on_test_start = time.time()
+                    estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("train chunk:", cost_time)
+
                     for idx in range(self.model.num_spks):
-                        for idx_batch in range(dataloader.batch_size):
-                            estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch, -self.chunk_size:]
+                        estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
 
-                    # 更新 estim_src_bn
                     for b in range(self.model.num_stages):
                         for r in range(self.model.num_spks):
-                            for idx_batch in range(dataloader.batch_size):
-                                estim_src_bn[b][r][idx_batch, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][idx_batch, -self.chunk_size:]
+                            estim_src_bn[b][r][:, i:i + self.chunk_size].copy_(
+                                estim_src_bn_tmp[b][r][:, -self.chunk_size:])
+
+                    # 更新 estim_src
+                    # for idx in range(self.model.num_spks):
+                    #     for idx_batch in range(dataloader.batch_size):
+                    #         #estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch, -self.chunk_size:]
+                    #         estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
+
+                    # 更新 estim_src_bn
+                    # for b in range(self.model.num_stages):
+                    #     for r in range(self.model.num_spks):
+                    #         for idx_batch in range(dataloader.batch_size):
+                    #             estim_src_bn[b][r][idx_batch, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][idx_batch, -self.chunk_size:]
 
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
@@ -151,24 +153,35 @@ class Engine(object):
                 nnet_input = nnet_input.to(self.device)
                 num_batch += 1
                 pbar.update(1)
-                frame_len = nnet_input.size(1)
-                # 初始化结果张量
-                if self.model.num_spks == 1:
-                    estim_src = [torch.zeros(2, frame_len).to(self.device)]
-                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                if self.non_chunk:
+                    on_test_start = time.time()
+                    #estim_src, estim_src_bn = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+                    estim_src, estim_src_bn = self.model(nnet_input)
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("validate non_chunk:",cost_time)
                 else:
-                    estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
-                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                    frame_len = nnet_input.size(1)
 
-                if 0:
+                    # 初始化结果张量
+                    if self.model.num_spks == 1:
+                        estim_src = [torch.zeros(2, frame_len).to(self.device)]
+                        estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                    else:
+                        estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                        estim_src_bn = [[torch.zeros(2, frame_len, device=self.device),torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+
                     # 遍历输入数据的块
                     for i in range(0, frame_len, self.chunk_size):
                         # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                        if i + self.chunk_size > frame_len:
-                            break
                         chunk = nnet_input[:, i:i + self.chunk_size]
-                        estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,
-                                                                                          device_ids=self.gpuid)
+
+                        on_test_start = time.time()
+                        estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
+                        on_test_end = time.time()
+                        cost_time = on_test_end - on_test_start
+                        print("validate chunk:", cost_time)
+
                         # 更新 estim_src
                         for idx in range(self.model.num_spks):
                             estim_src[idx][0, i:i + self.chunk_size] = estim_src_tmp[idx][0]
@@ -179,31 +192,6 @@ class Engine(object):
                             for r in range(self.model.num_spks):
                                 estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                                 estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
-                else:
-                    init_size = self.win_size -self.chunk_size
-                    init_chunk = torch.zeros(dataloader.batch_size, init_size).to(self.device)
-                    nnet_input = torch.cat([init_chunk[:, :], nnet_input[:, :]], dim=1)
-                    # 遍历输入数据的块
-                    for i in range(0, frame_len, self.chunk_size):
-                        if i + self.chunk_size > frame_len:
-                            break
-                        chunk = nnet_input[:, i:i + self.win_size]
-                        estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
-
-                        # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                        #chunk = nnet_input[:, i:i + self.chunk_size]
-                        #estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk, device_ids=self.gpuid)
-
-                        # 更新 estim_src
-                        for idx in range(self.model.num_spks):
-                            for idx_batch in range(dataloader.batch_size):
-                                estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch, -self.chunk_size:]
-
-                        # 更新 estim_src_bn
-                        for b in range(self.model.num_stages):
-                            for r in range(self.model.num_spks):
-                                for idx_batch in range(dataloader.batch_size):
-                                    estim_src_bn[b][r][idx_batch, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][idx_batch, -self.chunk_size:]
 
                 cur_loss_s_bn = []
                 for idx, estim_src_value in enumerate(estim_src_bn):
@@ -234,23 +222,37 @@ class Engine(object):
                 for input_sizes, mixture, src, key in dataloader:
                     if len(key) > 1:
                         raise("batch size is not one!!")
-                    nnet_input = mixture.to(self.device)
+                    #nnet_input = mixture.to(self.device)
+                    nnet_input = mixture.to('cpu')
                     num_batch += 1
                     pbar.update(1)
+                    if self.non_chunk:
+                        on_test_start = time.time()
+                        # estim_src, _ = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
+                        estim_src, _ = self.model(nnet_input)
+                        on_test_end = time.time()
+                        cost_time = on_test_end - on_test_start
+                        print("test non_chunk", cost_time)
+                    else:
+                        frame_len = nnet_input.size(1)
+                        # 初始化结果张量
+                        if self.model.num_spks == 1:
+                            estim_src = [torch.zeros(1, frame_len).to(self.device)]
+                        else:
+                            estim_src = [torch.zeros(1, frame_len).to(self.device),
+                                         torch.zeros(1, frame_len).to(self.device)]
 
-                    estim_src_0 = torch.zeros(1, nnet_input.size(1)).to(self.device)
-                    estim_src_1 = torch.zeros(1, nnet_input.size(1)).to(self.device)
+                        for i in range(0, frame_len, self.chunk_size):
+                            # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                            chunk = nnet_input[:, i:i + self.chunk_size]
+                            on_test_start = time.time()
+                            estim_src_tmp, _ = self.model(chunk)
+                            on_test_end = time.time()
+                            cost_time = on_test_end - on_test_start
+                            print("test chunk", cost_time)
 
-                    for i in range(0, nnet_input.size(1), self.chunk_size):
-                        # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                        if i + self.chunk_size > nnet_input.size(1):
-                            break
-                        chunk = nnet_input[:, i:i + self.chunk_size]
-                        chunk = chunk.to(self.device)
-                        estim_src_tmp, _ = torch.nn.parallel.data_parallel(self.model, chunk, device_ids=self.gpuid)
-                        estim_src_0[0, i:i + self.chunk_size] = estim_src_tmp[0]
-                        estim_src_1[0, i:i + self.chunk_size] = estim_src_tmp[1]
-                    estim_src = [estim_src_0, estim_src_1]
+                            for idx in range(self.model.num_spks):
+                                estim_src[idx][0, i:i + self.chunk_size] += estim_src_tmp[idx][0]
 
                     cur_loss_SISNRi, cur_loss_SISNRi_src = self.PIT_SISNRi_loss(estims=estim_src, mixture=mixture, input_sizes=input_sizes, target_attr=src, eps=1.0e-15)
                     total_loss_SISNRi += cur_loss_SISNRi.item() / self.config['model']['num_spks']
@@ -265,7 +267,12 @@ class Engine(object):
                         sf.write(os.path.join(wav_dir,key[0][:-4]+str(idx)+'_mixture.wav'), 0.5*mixture/max(abs(mixture)), 8000)
                         for i in range(self.config['model']['num_spks']):
                             src = torch.squeeze(estim_src[i]).cpu().data.numpy()
-                            sf.write(os.path.join(wav_dir,key[0][:-4]+str(idx)+'_out_'+str(i)+'.wav'), 0.5*src/max(abs(src)), 8000)
+                            if self.non_chunk:
+                                sf.write(os.path.join(wav_dir, key[0][:-4] + str(idx) + '_T_Test_Nonchunk_out_' + str(i) + '.wav'),
+                                         0.5 * src / max(abs(src)), 8000)
+                            else:
+                                sf.write(os.path.join(wav_dir, key[0][:-4] + str(idx) + '_T_Test_Chunk_out_' + str(i) + '.wav'),
+                                         0.5 * src / max(abs(src)), 8000)
                     idx += 1
                     dict_loss = {"SiSNRi": total_loss_SISNRi/num_batch, "SDRi": total_loss_SDRi/num_batch}
                     pbar.set_postfix(dict_loss)
@@ -274,7 +281,8 @@ class Engine(object):
     
     @logger_wraps()
     def run(self):
-        with torch.cuda.device(self.device):
+        #with torch.cuda.device(self.device):
+        with torch.device(self.device):
             if self.wandb_run: self.wandb_run.watch(self.model, log="all")
             writer_src = SummaryWriter(os.path.join(os.path.dirname(os.path.abspath(__file__)), "log/tensorboard"))
             if "test" in self.engine_mode:
@@ -326,7 +334,6 @@ class Engine(object):
                         'Test SDRi Loss': test_sdri_loss, 
                         'Test Speed': test_speed}
                     valid_loss_best = util_engine.save_checkpoint_per_best(valid_loss_best, valid_loss_src_time, train_loss_src_time, epoch, self.model, self.main_optimizer, self.checkpoint_path, self.wandb_run)
-                    #valid_loss_best = util_engine.save_checkpoint_per_nth(valid_loss_best, valid_loss_src_time, train_loss_src_time, epoch, self.model, self.main_optimizer, self.checkpoint_path, self.wandb_run)
                     # Logging to monitoring tools (Tensorboard && Wandb)
                     writer_src.add_scalars("Metrics", {
                         'Learning Rate': self.main_optimizer.param_groups[0]['lr'],
@@ -335,3 +342,81 @@ class Engine(object):
                     writer_src.flush()
                     if self.wandb_run: self.wandb_run.log(results)
                 logger.info(f"Training for {self.config['engine']['max_epoch']} epoches done!")
+
+    @logger_wraps()
+    def _inference(self, mixture, frames, mxiture_file, wav_dir=None):
+        self.model.eval()
+        with torch.inference_mode():
+            nnet_input = torch.tensor(mixture, device=self.device)
+
+            if self.non_chunk:
+                on_test_start = time.time()
+                estim_src, _ = self.model(nnet_input)
+                on_test_end = time.time()
+                cost_time = on_test_end - on_test_start
+                print("inference non_chunk", cost_time)
+
+            elif 1:
+                estim_src_0 = torch.zeros(1, nnet_input.size(1))
+                estim_src_1 = torch.zeros(1, nnet_input.size(1))
+
+                for i in range(0, nnet_input.size(1), self.chunk_size):
+                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
+                    chunk = nnet_input[:, i:i + self.chunk_size]
+                    on_test_start = time.time()
+                    estim_src_tmp, _ = self.model(chunk)
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("inference chunk", cost_time)
+
+                    estim_src_0[0,i:i + self.chunk_size]= estim_src_tmp[0]
+                    estim_src_1[0,i:i + self.chunk_size]= estim_src_tmp[1]
+                estim_src = [estim_src_0, estim_src_1]
+            else:
+                window = np.hamming(frames.shape[0])
+                frames_win = frames * window[:, np.newaxis]
+                frames_win_ten = torch.tensor(frames_win)
+                window_sum = np.zeros(nnet_input.size(1))
+
+                estim_src_0 = torch.zeros(1, nnet_input.size(1))
+                estim_src_1 = torch.zeros(1, nnet_input.size(1))
+                for i in range(frames_win.shape[1]):
+                    start = i * self.hop_len
+                    chunk = frames_win_ten[:,i].unsqueeze(0).float()
+                    on_test_start = time.time()
+                    #estim_src_tmp, _ = self.model(chunk)
+                    estim_src_tmp = [chunk, chunk]
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("inference chunk", cost_time)
+
+                    estim_src_0[:, start:start + self.chunk_size] += estim_src_tmp[0]
+                    estim_src_1[:, start:start + self.chunk_size] += estim_src_tmp[1]
+                    window_sum[start:start + self.chunk_size] += window
+
+                window_sum[window_sum == 0] = 1  # Avoid division by zero
+                estim_src_0 = estim_src_0.numpy().squeeze()  # 去掉多余的维度，变为形状 (N,)
+                estim_src_1 = estim_src_1.numpy().squeeze()  # 去掉多余的维度，变为形状 (N,)
+
+                estim_src_0 /= window_sum
+                estim_src_1 /= window_sum
+                estim_src_0 = torch.tensor(estim_src_0).unsqueeze(0)
+                estim_src_1 = torch.tensor(estim_src_1).unsqueeze(0)
+
+                estim_src = [estim_src_0, estim_src_1]
+
+            if self.engine_mode == "test_wav":
+                if wav_dir == None: wav_dir = os.path.join(os.path.dirname(__file__), "wav_out")
+                if wav_dir and not os.path.exists(wav_dir): os.makedirs(wav_dir)
+                mixture = torch.squeeze(mixture).cpu().data.numpy()
+                sf.write(os.path.join(wav_dir, mxiture_file + '.wav'),
+                         0.5 * mixture / max(abs(mixture)), 8000)
+                for i in range(self.config['model']['num_spks']):
+                    src = torch.squeeze(estim_src[i]).cpu().data.numpy()
+                    if self.non_chunk:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_T_Infer_Nonchunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
+                    else:
+                        sf.write(os.path.join(wav_dir, mxiture_file + f'_T_Infer_Chunk_output_{i}.wav'),
+                                 0.5 * src / max(abs(src)), 8000)
+        return

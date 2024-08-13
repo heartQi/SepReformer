@@ -44,11 +44,12 @@ wandb:
                     spk1: "tt_s1_t.scp"
                     spk2: "tt_s2_t.scp"
             dataloader:
-                batch_size: 1
+                batch_size: &var_batch_size 1
                 pin_memory: false
                 num_workers: 0
                 drop_last: false
             model:
+                batch_size: *var_batch_size
                 num_stages: &var_model_num_stages 4 # R
                 num_spks: &var_model_num_spks 2
                 module_audio_enc:
@@ -145,7 +146,7 @@ wandb:
                 WarmupConstantSchedule:
                     warmup_steps: 1000
             check_computations:
-                dummy_len: 16000
+                dummy_len: 400
             engine:
                 max_epoch: 200
                 gpuid: "0" ### "0"(single-gpu) or "0, 1" (multi-gpu)

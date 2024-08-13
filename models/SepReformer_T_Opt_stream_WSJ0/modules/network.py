@@ -1,7 +1,6 @@
 import torch
 import math
 import numpy
-import time
 from utils.decorators import *
 
 
@@ -59,14 +58,11 @@ class GCFN(torch.nn.Module):
         self.Layer_scale = LayerScale(dims=3, input_size=in_channels, Layer_scale_init=Layer_scale_init)
         
     def forward(self, x):
-        on_test_start0 = time.time()
         y = self.net1(x)
         y = y.permute(0, 2, 1).contiguous()
         y = self.depthwise(y)
         y = y.permute(0, 2, 1).contiguous()
         y = self.net2(y)
-        cost_time0 = time.time() - on_test_start0
-        print("GCFN:", cost_time0)
         return x + self.Layer_scale(y)
 
 
@@ -99,7 +95,6 @@ class MultiHeadAttention(torch.nn.Module):
             :return torch.Tensor: attentined and transformed `value` (batch, time1, d_model)
             weighted by the query dot key attention (batch, head, time1, time2)
         """
-        on_test_start0 = time.time()
         n_batch = x.size(0)
         x = self.layer_norm(x)
         q = self.linear_q(x).view(n_batch, -1, self.h, self.d_k)  #(b, t, d)
@@ -126,8 +121,6 @@ class MultiHeadAttention(torch.nn.Module):
         p_attn = self.dropout(self.attn)
         x = torch.matmul(p_attn, v)  # (batch, head, time1, d_k)
         x = x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)  # (batch, time1, d_model)
-        cost_time0 = time.time() - on_test_start0
-        print("MultiHeadAttention:", cost_time0)
         return self.Layer_scale(self.dropout(self.linear_out(x)))  # (batch, time1, d_model)
 
 class EGA(torch.nn.Module):
@@ -149,7 +142,6 @@ class EGA(torch.nn.Module):
             :param torch.Tensor mask: mask for x (batch, max_time_in)
             :rtype: Tuple[torch.Tensor, torch.Tensor]
         """
-        on_test_start0 = time.time()
         down_len = pos_k.shape[0]
         x_down = torch.nn.functional.adaptive_avg_pool1d(input=x, output_size=down_len)
         x = x.permute([0, 2, 1])
@@ -159,8 +151,6 @@ class EGA(torch.nn.Module):
         x_downup = torch.nn.functional.upsample(input=x_down, size=x.shape[1])
         x_downup = x_downup.permute([0, 2, 1])
         x = x + self.block['linear'](x) * x_downup
-        cost_time0 = time.time() - on_test_start0
-        print("EGA:", cost_time0)
         return x
 
 
@@ -181,7 +171,6 @@ class CLA(torch.nn.Module):
         self.Layer_scale = LayerScale(dims=3, input_size=in_channels, Layer_scale_init=Layer_scale_init)
     
     def forward(self, x):
-        on_test_start0 = time.time()
         y = self.layer_norm(x)
         y = self.linear1(y)
         y = self.GLU(y)
@@ -193,8 +182,6 @@ class CLA(torch.nn.Module):
         y = self.BN(y)
         y = y.permute(0, 2, 1) # B, T, 2F        
         y = self.linear3(y)
-        cost_time0 = time.time() - on_test_start0
-        print("CLA:", cost_time0)
         return x + self.Layer_scale(y)
     
 class GlobalBlock(torch.nn.Module):
@@ -213,12 +200,9 @@ class GlobalBlock(torch.nn.Module):
             :param torch.Tensor mask: mask for x (batch, max_time_in)
             :rtype: Tuple[torch.Tensor, torch.Tensor]
         """
-        on_test_start0 = time.time()
         x = self.block['ega'](x, pos_k)
         x = self.block['gcfn'](x)
         x = x.permute([0, 2, 1])
-        cost_time0 = time.time() - on_test_start0
-        print("GlobalBlock:", cost_time0)
         return x
 
 
@@ -231,11 +215,8 @@ class LocalBlock(torch.nn.Module):
         })
     
     def forward(self, x: torch.Tensor):
-        on_test_start0 = time.time()
         x = self.block['cla'](x)
         x = self.block['gcfn'](x)
-        cost_time0 = time.time() - on_test_start0
-        print("LocalBlock:", cost_time0)
         return x
     
     
@@ -252,7 +233,6 @@ class SpkAttention(torch.nn.Module):
             :param torch.Tensor mask: mask for x (batch, max_time_in)
             :rtype: Tuple[torch.Tensor, torch.Tensor]
         """
-        on_test_start0 = time.time()
         B, F, T = x.shape
         x = x.view(B//num_spk, num_spk, F, T).contiguous()
         x = x.permute([0, 3, 1, 2]).contiguous()
@@ -264,6 +244,4 @@ class SpkAttention(torch.nn.Module):
         x = x.permute([0, 2, 1])
         x = self.feed_forward(x)
         x = x.permute([0, 2, 1])
-        cost_time0 = time.time() - on_test_start0
-        print("SpkAttention:", cost_time0)
         return x
