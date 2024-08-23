@@ -17,3 +17,6 @@ models/SepReformer_T_WSJ0/pth/
 *.pth
 events*
 *xml
+*mat
+*iml
+*xlsx
