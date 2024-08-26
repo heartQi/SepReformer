@@ -49,7 +49,6 @@ wandb:
                 num_workers: 0
                 drop_last: false
             model:
-                batch_size: *var_batch_size
                 num_stages: &var_model_num_stages 4 # R
                 num_spks: &var_model_num_spks 2
                 module_audio_enc:

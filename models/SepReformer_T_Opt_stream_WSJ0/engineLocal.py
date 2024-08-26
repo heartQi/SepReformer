@@ -10,6 +10,7 @@ from tqdm import tqdm
 from utils import util_engine, functions
 from utils.decorators import *
 from torch.utils.tensorboard import SummaryWriter
+from .modules.network import MultiHeadAttention
 
 
 @logger_wraps()
@@ -38,8 +39,6 @@ class Engine(object):
         self.wandb_run = wandb_run
         self.non_chunk = args.non_chunk
         self.chunk_size = 400
-        self.hop_len = args.hop_len
-        self.win_size = 2000
         
         # Logging 
         util_engine.model_params_mac_summary(
@@ -51,15 +50,13 @@ class Engine(object):
         )
         
         logger.info(f"Clip gradient by 2-norm {self.config['engine']['clip_norm']}")
-    
+
     @logger_wraps()
     def _train(self, dataloader, epoch):
         self.model.train()
         tot_loss_freq = [0 for _ in range(self.model.num_stages)]
         tot_loss_time, num_batch = 0, 0
         pbar = tqdm(total=len(dataloader), unit='batches', bar_format='{l_bar}{bar:25}{r_bar}{bar:-10b}', colour="YELLOW", dynamic_ncols=True)
-        init_size = self.win_size - self.chunk_size
-        init_chunk = torch.zeros(dataloader.batch_size, init_size).to(self.device)
         for input_sizes, mixture, src, _ in dataloader:
             nnet_input = mixture
             nnet_input = functions.apply_cmvn(nnet_input) if self.config['engine']['mvn'] else nnet_input
@@ -69,57 +66,37 @@ class Engine(object):
             if epoch == 1: self.warmup_scheduler.step()
             nnet_input = nnet_input.to(self.device)
             self.main_optimizer.zero_grad()
+            new_batch = True
+            frame_len = nnet_input.size(1)
+            # 初始化结果张量
+            if self.model.num_spks == 1:
+                estim_src = [torch.zeros(2, frame_len).to(self.device)]
+                estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+            else:
+                estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
+                estim_src_bn = [
+                    [torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _
+                    in range(self.model.num_stages)]
 
-            if self.non_chunk:
+            # 遍历输入数据的块
+            for i in range(0, frame_len, self.chunk_size):
+                if i + self.chunk_size > frame_len:
+                    break
+                chunk = nnet_input[:, i:i + self.chunk_size]
+
                 on_test_start = time.time()
-                # estim_src, estim_src_bn = torch.nn.parallel.data_parallel(self.model, nnet_input, device_ids=self.gpuid)
-                estim_src, estim_src_bn = self.model(nnet_input)
+                estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
                 on_test_end = time.time()
                 cost_time = on_test_end - on_test_start
-                print("train non_chunk:", cost_time)
-            else:
-                frame_len = nnet_input.size(1)
-                # 初始化结果张量
-                if self.model.num_spks == 1:
-                    estim_src = [torch.zeros(2, frame_len).to(self.device)]
-                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
-                else:
-                    estim_src = [torch.zeros(2, frame_len).to(self.device), torch.zeros(2, frame_len).to(self.device)]
-                    estim_src_bn = [[torch.zeros(2, frame_len, device=self.device), torch.zeros(2, frame_len, device=self.device)] for _ in range(self.model.num_stages)]
+                print("train chunk:", cost_time)
 
-                nnet_input = torch.cat([init_chunk[:, :], nnet_input[:, :]], dim=1)
-                # 遍历输入数据的块
-                for i in range(0, frame_len, self.chunk_size):
-                    if i + self.chunk_size > frame_len:
-                        break
-                    chunk = nnet_input[:, i:i + self.win_size]
-                    #chunk = nnet_input[:, i:i + self.chunk_size]
+                for idx in range(self.model.num_spks):
+                    estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
 
-                    on_test_start = time.time()
-                    estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
-                    on_test_end = time.time()
-                    cost_time = on_test_end - on_test_start
-                    print("train chunk:", cost_time)
-
-                    for idx in range(self.model.num_spks):
-                        estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
-
-                    for b in range(self.model.num_stages):
-                        for r in range(self.model.num_spks):
-                            estim_src_bn[b][r][:, i:i + self.chunk_size].copy_(
-                                estim_src_bn_tmp[b][r][:, -self.chunk_size:])
-
-                    # 更新 estim_src
-                    # for idx in range(self.model.num_spks):
-                    #     for idx_batch in range(dataloader.batch_size):
-                    #         #estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch, -self.chunk_size:]
-                    #         estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
-
-                    # 更新 estim_src_bn
-                    # for b in range(self.model.num_stages):
-                    #     for r in range(self.model.num_spks):
-                    #         for idx_batch in range(dataloader.batch_size):
-                    #             estim_src_bn[b][r][idx_batch, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][idx_batch, -self.chunk_size:]
+                for b in range(self.model.num_stages):
+                    for r in range(self.model.num_spks):
+                        estim_src_bn[b][r][:, i:i + self.chunk_size].copy_(
+                            estim_src_bn_tmp[b][r][:, -self.chunk_size:])
 
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
@@ -131,6 +108,11 @@ class Engine(object):
             cur_loss = (1-alpha) * cur_loss_s + alpha * sum(cur_loss_s_bn) / len(cur_loss_s_bn)
             cur_loss = cur_loss / self.config['model']['num_spks']
             cur_loss.backward()
+            # 在这里清除 self.past_key_value
+            for module in self.model.modules():
+                if isinstance(module, MultiHeadAttention):
+                    module.past_key_value = None
+
             if self.config['engine']['clip_norm']: torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['engine']['clip_norm'])
             self.main_optimizer.step()
             dict_loss = {"T_Loss": tot_loss_time / num_batch}

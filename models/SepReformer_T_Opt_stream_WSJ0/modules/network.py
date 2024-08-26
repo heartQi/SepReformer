@@ -86,8 +86,16 @@ class MultiHeadAttention(torch.nn.Module):
         self.attn = None
         self.dropout = torch.nn.Dropout(p=dropout_rate)
         self.Layer_scale = LayerScale(dims=3, input_size=in_channels, Layer_scale_init=Layer_scale_init)
-    
-    def forward(self, x, pos_k, mask):
+        self.past_key_value = None
+        self.max_cache_len = 100
+        self.pe_k = torch.nn.Embedding(num_embeddings=2 * self.max_cache_len, embedding_dim=self.d_k)
+
+    def pos_emb(self, pos_seq: torch.Tensor):
+        pos_seq = torch.clamp(pos_seq, -self.max_cache_len, self.max_cache_len - 1)
+        pos_seq += self.max_cache_len
+        return self.pe_k(pos_seq)
+
+    def forward(self, x, pos_kk, mask):
         """
         Compute 'Scaled Dot Product Attention'.
             :param torch.Tensor mask: (batch, time1, time2)
@@ -97,17 +105,32 @@ class MultiHeadAttention(torch.nn.Module):
         """
         n_batch = x.size(0)
         x = self.layer_norm(x)
-        q = self.linear_q(x).view(n_batch, -1, self.h, self.d_k)  #(b, t, d)
-        k = self.linear_k(x).view(n_batch, -1, self.h, self.d_k)  #(b, t, d)
-        v = self.linear_v(x).view(n_batch, -1, self.h, self.d_k)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)  # (batch, head, time2, d_k)
-        v = v.transpose(1, 2)  # (batch, head, time2, d_k)
-        A = torch.matmul(q, k.transpose(-2, -1))
-        reshape_q = q.contiguous().view(n_batch * self.h, -1, self.d_k).transpose(0,1)
-        if pos_k is not None:
-            B = torch.matmul(reshape_q, pos_k.transpose(-2, -1))
-            B = B.transpose(0, 1).view(n_batch, self.h, pos_k.size(0), pos_k.size(1))
+        q = self.linear_q(x).view(n_batch, -1, self.h, self.d_k).transpose(1, 2)  # (batch, head, time1, d_k)
+        k = self.linear_k(x).view(n_batch, -1, self.h, self.d_k).transpose(1, 2)
+        v = self.linear_v(x).view(n_batch, -1, self.h, self.d_k).transpose(1, 2)
+
+        if self.past_key_value is not None:
+            past_k, past_v = self.past_key_value
+            past_k = past_k.detach()
+            past_v = past_v.detach()
+            k = torch.cat([past_k, k], dim=2)
+            v = torch.cat([past_v, v], dim=2)
+            if k.size(2) > self.max_cache_len:
+                k = k[:, :, -self.max_cache_len:]
+                v = v[:, :, -self.max_cache_len:]
+
+        self.past_key_value = (k, v)
+
+        A = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+        if pos_kk is not None:
+            pos_seq = torch.arange(k.size(2), device=k.device)
+            pos_seq = pos_seq[:, None] - pos_seq[None, :]
+            pos_k = self.pos_emb(pos_seq)
+            select_pos_k = pos_k[-q.size(2):, :, :]
+
+            reshape_q = q.contiguous().view(n_batch * self.h, -1, self.d_k).transpose(0, 1)
+            B = torch.matmul(reshape_q, select_pos_k.transpose(-2, -1))
+            B = B.transpose(0, 1).view(n_batch, self.h, select_pos_k.size(0), select_pos_k.size(1))
             scores = (A + B) / math.sqrt(self.d_k)
         else:
             scores = A / math.sqrt(self.d_k)

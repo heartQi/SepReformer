@@ -10,7 +10,7 @@ from tqdm import tqdm
 from utils import util_engine, functions
 from utils.decorators import *
 from torch.utils.tensorboard import SummaryWriter
-
+from .modules.network import MultiHeadAttention
 
 @logger_wraps()
 class Engine(object):
@@ -94,30 +94,19 @@ class Engine(object):
                             estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                             estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
             else:
-                init_size = self.win_size - self.chunk_size
-                init_chunk = torch.zeros(dataloader.batch_size, init_size).to(self.device)
-                nnet_input = torch.cat([init_chunk[:, :], nnet_input[:, :]], dim=1)
                 # 遍历输入数据的块
                 for i in range(0, frame_len, self.chunk_size):
                     if i + self.chunk_size > frame_len:
                         break
-                    chunk = nnet_input[:, i:i + self.win_size]
+                    chunk = nnet_input[:, i:i + self.chunk_size]
                     estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
-
-                    # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                    #chunk = nnet_input[:, i:i + self.chunk_size]
-                    #estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk,device_ids=self.gpuid)
-
-                    # 更新 estim_src
                     for idx in range(self.model.num_spks):
-                        for idx_batch in range(dataloader.batch_size):
-                            estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch, -self.chunk_size:]
+                        estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
 
-                    # 更新 estim_src_bn
                     for b in range(self.model.num_stages):
                         for r in range(self.model.num_spks):
-                            for idx_batch in range(dataloader.batch_size):
-                                estim_src_bn[b][r][idx_batch, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][idx_batch, -self.chunk_size:]
+                            estim_src_bn[b][r][:, i:i + self.chunk_size].copy_(
+                                estim_src_bn_tmp[b][r][:, -self.chunk_size:])
 
             cur_loss_s_bn = []
             for idx, estim_src_value in enumerate(estim_src_bn):
@@ -129,6 +118,11 @@ class Engine(object):
             cur_loss = (1-alpha) * cur_loss_s + alpha * sum(cur_loss_s_bn) / len(cur_loss_s_bn)
             cur_loss = cur_loss / self.config['model']['num_spks']
             cur_loss.backward()
+            # 在这里清除 self.past_key_value
+            for module in self.model.modules():
+                if isinstance(module, MultiHeadAttention):
+                    module.past_key_value = None
+
             if self.config['engine']['clip_norm']: torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['engine']['clip_norm'])
             self.main_optimizer.step()
             dict_loss = {"T_Loss": tot_loss_time / num_batch}
@@ -180,31 +174,19 @@ class Engine(object):
                                 estim_src_bn[b][r][0, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][0]
                                 estim_src_bn[b][r][1, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][1]
                 else:
-                    init_size = self.win_size -self.chunk_size
-                    init_chunk = torch.zeros(dataloader.batch_size, init_size).to(self.device)
-                    nnet_input = torch.cat([init_chunk[:, :], nnet_input[:, :]], dim=1)
                     # 遍历输入数据的块
                     for i in range(0, frame_len, self.chunk_size):
                         if i + self.chunk_size > frame_len:
                             break
-                        chunk = nnet_input[:, i:i + self.win_size]
+                        chunk = nnet_input[:, i:i + self.chunk_size]
                         estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
-
-                        # 获取当前 chunk_size 个元素的块，并保持第一个维度不变
-                        #chunk = nnet_input[:, i:i + self.chunk_size]
-                        #estim_src_tmp, estim_src_bn_tmp = torch.nn.parallel.data_parallel(self.model, chunk, device_ids=self.gpuid)
-
-                        # 更新 estim_src
                         for idx in range(self.model.num_spks):
-                            for idx_batch in range(dataloader.batch_size):
-                                estim_src[idx][idx_batch, i:i + self.chunk_size] = estim_src_tmp[idx][idx_batch, -self.chunk_size:]
+                            estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
 
-                        # 更新 estim_src_bn
                         for b in range(self.model.num_stages):
                             for r in range(self.model.num_spks):
-                                for idx_batch in range(dataloader.batch_size):
-                                    estim_src_bn[b][r][idx_batch, i:i + self.chunk_size] = estim_src_bn_tmp[b][r][idx_batch, -self.chunk_size:]
-
+                                estim_src_bn[b][r][:, i:i + self.chunk_size].copy_(
+                                    estim_src_bn_tmp[b][r][:, -self.chunk_size:])
                 cur_loss_s_bn = []
                 for idx, estim_src_value in enumerate(estim_src_bn):
                     cur_loss_s_bn.append(self.PIT_SISNR_mag_loss(estims=estim_src_value, idx=idx, input_sizes=input_sizes, target_attr=src))

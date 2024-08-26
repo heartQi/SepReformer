@@ -55,6 +55,7 @@ class Engine(object):
         out_win = 0
         out_linear = 0
         win_in_win_out = 1
+        stream = 1
         with torch.inference_mode():
             nnet_input = torch.tensor(mixture, device=self.device)
             if self.model.num_spks == 1:
@@ -191,6 +192,21 @@ class Engine(object):
                     for idx in range(self.model.num_spks):
                             estim_src[idx][0, i:i + self.chunk_size] = estim_src[idx][0, i:i + self.chunk_size] + estim_src_tmp[idx][0]
                             estim_src[idx][0, i:i + self.hop_len] /= window_sum[i:i + self.hop_len]
+            elif stream:
+                # 遍历输入数据的块
+                for i in range(0, nnet_input.size(1), self.chunk_size):
+                    if i + self.chunk_size > nnet_input.size(1):
+                        break
+                    chunk = nnet_input[:, i:i + self.chunk_size]
+
+                    on_test_start = time.time()
+                    estim_src_tmp, estim_src_bn_tmp = self.model(chunk)
+                    on_test_end = time.time()
+                    cost_time = on_test_end - on_test_start
+                    print("train chunk:", cost_time)
+
+                    for idx in range(self.model.num_spks):
+                        estim_src[idx][:, i:i + self.chunk_size].copy_(estim_src_tmp[idx][:, -self.chunk_size:])
 
             else:
                 window = np.hamming(frames.shape[0])
