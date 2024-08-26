@@ -44,7 +44,7 @@ wandb:
                     spk1: "tt_s1_t.scp"
                     spk2: "tt_s2_t.scp"
             dataloader:
-                batch_size: &var_batch_size 1
+                batch_size: 2
                 pin_memory: false
                 num_workers: 0
                 drop_last: false

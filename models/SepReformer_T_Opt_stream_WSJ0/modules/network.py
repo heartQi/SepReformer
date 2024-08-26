@@ -90,6 +90,7 @@ class MultiHeadAttention(torch.nn.Module):
         self.max_cache_frame = 50
         self.max_cache_len = 32000
         self.pe_k = torch.nn.Embedding(num_embeddings=2 * self.max_cache_len, embedding_dim=self.d_k)
+        self.is_initialized = False
 
     def pos_emb(self, pos_seq: torch.Tensor):
         pos_seq = torch.clamp(pos_seq, -self.max_cache_len, self.max_cache_len - 1)
@@ -109,25 +110,27 @@ class MultiHeadAttention(torch.nn.Module):
         q = self.linear_q(x).view(n_batch, -1, self.h, self.d_k).transpose(1, 2)  # (batch, head, time1, d_k)
         k = self.linear_k(x).view(n_batch, -1, self.h, self.d_k).transpose(1, 2)
         v = self.linear_v(x).view(n_batch, -1, self.h, self.d_k).transpose(1, 2)
-
-        if self.past_key_value is not None:
-            max_cache_len = self.max_cache_frame * q.size(2)
-            past_k, past_v = self.past_key_value
-            past_k = past_k.detach()
-            past_v = past_v.detach()
-            if not torch.isnan(k).any() and not torch.isnan(v).any():
-                k = torch.cat([past_k, k], dim=2)
-                v = torch.cat([past_v, v], dim=2)
-                if k.size(2) > max_cache_len:
-                    k = k[:, :, -max_cache_len:]
-                    v = v[:, :, -max_cache_len:]
-                self.past_key_value = (k, v)
+        if self.is_initialized:
+            if self.past_key_value is not None:
+                max_cache_len = self.max_cache_frame * q.size(2)
+                past_k, past_v = self.past_key_value
+                past_k = past_k.detach()
+                past_v = past_v.detach()
+                if not torch.isnan(k).any() and not torch.isnan(v).any():
+                    k = torch.cat([past_k, k], dim=2)
+                    v = torch.cat([past_v, v], dim=2)
+                    if k.size(2) > max_cache_len:
+                        k = k[:, :, -max_cache_len:]
+                        v = v[:, :, -max_cache_len:]
+                    self.past_key_value = (k, v)
+                else:
+                    k = past_k
+                    v = past_v
             else:
-                k = past_k
-                v = past_v
+                if not torch.isnan(k).any() and not torch.isnan(v).any():
+                    self.past_key_value = (k, v)
         else:
-            if not torch.isnan(k).any() and not torch.isnan(v).any():
-                self.past_key_value = (k, v)
+            self.is_initialized = True
 
         A = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
         if pos_kk is not None:
