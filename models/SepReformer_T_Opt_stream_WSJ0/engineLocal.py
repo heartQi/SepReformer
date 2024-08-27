@@ -111,7 +111,9 @@ class Engine(object):
             # 在这里清除 self.past_key_value
             for module in self.model.modules():
                 if isinstance(module, MultiHeadAttention):
-                    module.past_key_value = None
+                    if module.past_key_value is not None:
+                        past_k, past_v = module.past_key_value
+                        module.past_key_value = (torch.zeros_like(past_k), torch.zeros_like(past_v))
 
             if self.config['engine']['clip_norm']: torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config['engine']['clip_norm'])
             self.main_optimizer.step()
